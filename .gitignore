@@ -1,0 +1,4 @@
+build*/
+src/local_dirs.h
+shaders/*.spv
+compile_commands.json
