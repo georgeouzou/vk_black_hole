@@ -1,0 +1,16 @@
+#pragma once
+
+namespace vk_black_hole
+{
+
+const char *get_resources_dir()
+{
+	return "@RESOURCES_DIR@/";
+}
+
+const char *get_shaders_dir()
+{
+	return "@SHADERS_DIR@/";
+}
+
+}
