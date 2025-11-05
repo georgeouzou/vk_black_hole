@@ -230,10 +230,17 @@ void App::create_pipeline()
 
 	vkCreateDescriptorSetLayout(m_device.device, &dslci, nullptr, &m_desc_set_layout);
 
+    VkPushConstantRange pcr = {};
+    pcr.offset = 0;
+    pcr.size = 2 * sizeof(uint32_t);
+    pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
 	VkPipelineLayoutCreateInfo plci = {};
 	plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 	plci.setLayoutCount = 1;
 	plci.pSetLayouts = &m_desc_set_layout;
+    plci.pushConstantRangeCount = 1;
+    plci.pPushConstantRanges = &pcr;
 
 	vkCreatePipelineLayout(m_device.device, &plci, nullptr, &m_pipeline_layout);
 
@@ -486,6 +493,8 @@ void App::render(uint32_t width, uint32_t height)
 
     vkext::vkCmdPushDescriptorSetKHR(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline_layout, 0,
 		desc_writes.size(), desc_writes.data());
+    uint32_t pc[2] = { width, height };
+    vkCmdPushConstants(cmd_buf, m_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, 2*sizeof(uint32_t), &pc);
 	vkCmdDispatch(cmd_buf, width/8, height/8, 1);
 
     {
