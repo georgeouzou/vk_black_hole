@@ -40,6 +40,7 @@ public matrix<T,N,N> inverse(matrix<T,N,N> m)
 }
 
 //https://www2.mpia-hd.mpg.de/homes/tmueller/pdfs/catalogue_2014-05-21.pdf 2.2.1
+[Differentiable]
 float4x4 schwarzschild_metric(float4 position)
 {
     float rs = 1.0;
@@ -96,22 +97,6 @@ Geodesic make_lightlike_geodesic(float4 position, float3 direction, Tetrad tetra
     return g;
 }
 
-float4x4 schwarzschild_metric_diff(float4 position, int direction)
-{
-    var p_up = position;
-    var p_lo = position;
-
-    float h = 0.00001;
-
-    p_up[direction] += h;
-    p_lo[direction] -= h;
-
-    let up = schwarzschild_metric(p_up);
-    let lo = schwarzschild_metric(p_lo);
-
-    return (up - lo) / (2.0 * h);
-}
-
 // https://www2.mpia-hd.mpg.de/homes/tmueller/pdfs/catalogue_2014-05-21.pdf
 void calculate_christoff2(float4 position, out float4x4 Gamma[4])
 {
@@ -120,7 +105,10 @@ void calculate_christoff2(float4 position, out float4x4 Gamma[4])
     float4x4 metric_diff[4]; // uses the index signature, diGjk
 
     for (int i = 0; i < 4; i++) {
-        float4x4 differentiated = schwarzschild_metric_diff(position, i);
+        float4 d = { 0.0, 0.0, 0.0, 0.0 };
+        d[i] = 1.0;
+        DifferentialPair<float4> dp = diffPair(position, d);
+        float4x4 differentiated = fwd_diff(schwarzschild_metric)(dp).getDifferential();
         metric_diff[i] = differentiated;
     }
 
