@@ -82,7 +82,7 @@ namespace
 
 std::vector<uint32_t> read_spv()
 {
-	std::ifstream file(std::string(vk_black_hole::get_shaders_dir()) + "black_hole.spv", std::ios::ate | std::ios::binary);
+	std::ifstream file("black_hole.spv", std::ios::ate | std::ios::binary);
 	if (!file.is_open()) {
 		throw std::runtime_error("failed to open shader file");
 	}

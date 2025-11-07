@@ -31,20 +31,20 @@ target_link_libraries(${app} vk-bootstrap::vk-bootstrap)
 find_package(Vulkan)
 target_link_libraries(${app} Vulkan::Vulkan)
 
-#set(shader_bins
-#    ${CMAKE_CURRENT_BINARY_DIR}/black_hole.spv
-#)
+add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/black_hole.spv
+    COMMAND slangc ${SHADERS_DIR}/black_hole.slang -target spirv -o ${CMAKE_CURRENT_BINARY_DIR}/black_hole.spv
+    DEPENDS ${SHADERS_DIR}/black_hole.slang
+    COMMENT "Building black_hole.spv"
+)
 
-#add_custom_command(
-#    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/black_hole.spv
-#    COMMAND glslc ${SHADERS_DIR}/black_hole.comp --target-env=vulkan1.3 -o ${CMAKE_CURRENT_BINARY_DIR}/black_hole.spv
-#    DEPENDS ${SHADERS_DIR}/black_hole.comp
-#    COMMENT "Building black_hole.spv"
-#)
-#
-#add_custom_target(
-#    build_shaders ALL
-#    ${shader_bins}
-#)
+set(SHADER_BINS
+    ${CMAKE_CURRENT_BINARY_DIR}/black_hole.spv
+)
 
-#add_dependencies(${app} build_shaders)
+add_custom_target(
+    Shaders ALL
+    DEPENDS ${SHADER_BINS}
+)
+
+add_dependencies(${app} Shaders)
