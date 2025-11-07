@@ -98,7 +98,7 @@ Geodesic make_lightlike_geodesic(float4 position, float3 direction, Tetrad tetra
 }
 
 // https://www2.mpia-hd.mpg.de/homes/tmueller/pdfs/catalogue_2014-05-21.pdf
-void calculate_christoff2(float4 position, out float4x4 Gamma[4])
+void calculate_christoffel(float4 position, out float4x4 Gamma[4])
 {
     float4x4 metric = schwarzschild_metric(position);
     float4x4 metric_inverse = inverse(metric);
@@ -112,10 +112,14 @@ void calculate_christoff2(float4 position, out float4x4 Gamma[4])
         metric_diff[i] = differentiated;
     }
 
+    [[unroll]]
     for (int mi = 0; mi < 4; mi++) {
+        [[unroll]]
         for (int alpha = 0; alpha < 4; alpha++) {
+            [[unroll]]
             for (int beta = 0; beta < 4; beta++) {
                 float sum = 0;
+                [[unroll]]
                 for (int sigma = 0; sigma < 4; sigma++) {
                     sum += 0.5 * metric_inverse[mi][sigma] * (
                         metric_diff[beta][sigma][alpha] + 
@@ -132,18 +136,20 @@ void calculate_christoff2(float4 position, out float4x4 Gamma[4])
 
 float4 calculate_schwarzschild_acceleration(float4 X, float4 v)
 {
-    float4x4 christoff2[4];
-    calculate_christoff2(X, christoff2);
+    float4x4 gamma[4];
+    calculate_christoffel(X, gamma);
 
     float4 acceleration;
     for (int mi = 0; mi < 4; mi++) {
-        float sum = 0;
-        for (int alpha = 0; alpha < 4; alpha++) {
-            for (int beta = 0; beta < 4; beta++) {
-                sum += -christoff2[mi][alpha][beta] * v[alpha] * v[beta];
-            }
-        }
-        acceleration[mi] = sum;
+        float4x4 gm = gamma[mi];
+        acceleration[mi] = -dot(mul(gm, v), v);
+        //float sum = 0.0;
+        //for (int alpha = 0; alpha < 4; alpha++) {
+        //    for (int beta = 0; beta < 4; beta++) {
+        //        sum += -christoff2[mi][alpha][beta] * v[alpha] * v[beta];
+        //    }
+        //}
+        //acceleration[mi] = sum;
     }
     return acceleration;
 }
