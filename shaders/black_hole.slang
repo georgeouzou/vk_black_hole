@@ -39,37 +39,54 @@ public matrix<T,N,N> inverse(matrix<T,N,N> m)
     }
 }
 
-//https://www2.mpia-hd.mpg.de/homes/tmueller/pdfs/catalogue_2014-05-21.pdf 2.2.1
+interface IMetric
+{
+    [Differentiable]
+    float4x4 get(float4 position);
+
+    Tetrad calculate_tetrad(float4 position);
+};
+
 [Differentiable]
-float4x4 schwarzschild_metric(float4 position)
+float4x4 get_metric(IMetric m, float4 position)
 {
-    float rs = 1.0;
-
-    float r = position[1];
-    float theta = position[2];
-
-    float4x4 m = float4x4(0.0);
-    m[0][0] = -(1.0 - rs / r);
-    m[1][1] = 1.0 / (1.0 - rs / r);
-    m[2][2] = r * r;
-    m[3][3] = r * r * sin(theta) * sin(theta);
-    return m;
+   return m.get(position);
 }
 
-//https://www2.mpia-hd.mpg.de/homes/tmueller/pdfs/catalogue_2014-05-21.pdf 2.2.6
-Tetrad calculate_schwarzschild_tetrad(float4 position)
+struct SchwarzschildMetric : IMetric
 {
-    float rs = 1.0;
-    float r = position[1];
-    float theta = position[2];
+    //https://www2.mpia-hd.mpg.de/homes/tmueller/pdfs/catalogue_2014-05-21.pdf 2.2.1
+    [Differentiable]
+    float4x4 get(float4 position)
+    {
+        float rs = 1.0;
+    
+        float r = position[1];
+        float theta = position[2];
+    
+        float4x4 m = float4x4(0.0);
+        m[0][0] = -(1.0 - rs / r);
+        m[1][1] = 1.0 / (1.0 - rs / r);
+        m[2][2] = r * r;
+        m[3][3] = r * r * sin(theta) * sin(theta);
+        return m;
+    }
 
-    float4 et = float4(1.0 / sqrt(1.0 - rs / r), 0.0, 0.0, 0.0);
-    float4 er = float4(0.0, sqrt(1.0 - rs / r), 0.0, 0.0);
-    float4 etheta = float4(0.0, 0.0, 1.0 / r, 0.0);
-    float4 ephi = float4(0.0, 0.0, 0.0, 1.0 / (r * sin(theta)));
-
-    return {et, er, etheta, ephi};
-}
+    //https://www2.mpia-hd.mpg.de/homes/tmueller/pdfs/catalogue_2014-05-21.pdf 2.2.6
+    Tetrad calculate_tetrad(float4 position)
+    {
+        float rs = 1.0;
+        float r = position[1];
+        float theta = position[2];
+    
+        float4 et = float4(rsqrt(1.0 - rs / r), 0.0, 0.0, 0.0);
+        float4 er = float4(0.0, sqrt(1.0 - rs / r), 0.0, 0.0);
+        float4 etheta = float4(0.0, 0.0, 1.0 / r, 0.0);
+        float4 ephi = float4(0.0, 0.0, 0.0, 1.0 / (r * sin(theta)));
+    
+        return {et, er, etheta, ephi};
+    }
+};
 
 float3 get_ray_through_pixel(uint sx, uint sy, uint width, uint height, float fov_degrees)
 {
@@ -98,9 +115,10 @@ Geodesic make_lightlike_geodesic(float4 position, float3 direction, Tetrad tetra
 }
 
 // https://www2.mpia-hd.mpg.de/homes/tmueller/pdfs/catalogue_2014-05-21.pdf
-void calculate_christoffel(float4 position, out float4x4 Gamma[4])
+
+void calculate_christoffel(IMetric m, float4 position, out float4x4 Gamma[4])
 {
-    float4x4 metric = schwarzschild_metric(position);
+    float4x4 metric = get_metric(m, position);
     float4x4 metric_inverse = inverse(metric);
     float4x4 metric_diff[4]; // uses the index signature, diGjk
 
@@ -108,7 +126,7 @@ void calculate_christoffel(float4 position, out float4x4 Gamma[4])
         float4 d = { 0.0, 0.0, 0.0, 0.0 };
         d[i] = 1.0;
         DifferentialPair<float4> dp = diffPair(position, d);
-        float4x4 differentiated = fwd_diff(schwarzschild_metric)(dp).getDifferential();
+        float4x4 differentiated = fwd_diff(get_metric)(m, dp).getDifferential();
         metric_diff[i] = differentiated;
     }
 
@@ -134,10 +152,10 @@ void calculate_christoffel(float4 position, out float4x4 Gamma[4])
     }
 }
 
-float4 calculate_schwarzschild_acceleration(float4 X, float4 v)
+float4 calculate_schwarzschild_acceleration(IMetric m, float4 X, float4 v)
 {
     float4x4 gamma[4];
-    calculate_christoffel(X, gamma);
+    calculate_christoffel(m, X, gamma);
 
     float4 acceleration;
     for (int mi = 0; mi < 4; mi++) {
@@ -167,7 +185,7 @@ struct IntegrationResult
 };
 
 // this integrates a geodesic, until it either escapes our small universe or hits the event horizon
-IntegrationResult integrate(inout Geodesic g)
+IntegrationResult integrate(IMetric m, inout Geodesic g)
 {
     IntegrationResult result;
     result.type = HitType::UNFINISHED;
@@ -177,7 +195,7 @@ IntegrationResult integrate(inout Geodesic g)
     float start_time = g.position[0];
 
     for (int i = 0; i < 100000; i++) {
-        float4 acceleration = calculate_schwarzschild_acceleration(g.position, g.velocity);
+        float4 acceleration = calculate_schwarzschild_acceleration(m, g.position, g.velocity);
 
         g.velocity += acceleration * dt;
         g.position += g.velocity * dt;
@@ -230,7 +248,8 @@ void main(
     float3 ray_direction = get_ray_through_pixel(tid.x, tid.y, width, height, 90);
     float4 camera_position = { 0.0 , 8.0, PI / 2.0, -PI / 2.0};
 
-    Tetrad tetrads = calculate_schwarzschild_tetrad(camera_position);
+    SchwarzschildMetric metric;
+    Tetrad tetrads = metric.calculate_tetrad(camera_position);
 
     // the tetrad vectors give us a basis, that points in the direction t, r, theta, and phi
     // we'd like the ray to point towards the black hole: this means we make +z point towards -r, +y point towards +theta, and +x point towards +phi
@@ -238,7 +257,7 @@ void main(
 
     Geodesic my_geodesic = make_lightlike_geodesic(camera_position, ray_direction, tetrads);
 
-    IntegrationResult result = integrate(my_geodesic);
+    IntegrationResult result = integrate(metric, my_geodesic);
 
     float3 color;
     if(result.type == HitType::EVENT_HORIZON || result.type == HitType::UNFINISHED) {
