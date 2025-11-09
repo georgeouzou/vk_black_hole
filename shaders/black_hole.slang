@@ -45,6 +45,8 @@ interface IMetric
     float4x4 get(float4 position);
 
     Tetrad calculate_tetrad(float4 position);
+
+    bool is_below_event_horizon(float r);
 };
 
 [Differentiable]
@@ -55,12 +57,12 @@ float4x4 get_metric(IMetric m, float4 position)
 
 struct SchwarzschildMetric : IMetric
 {
+    static const float rs = 1.0;
+
     //https://www2.mpia-hd.mpg.de/homes/tmueller/pdfs/catalogue_2014-05-21.pdf 2.2.1
     [Differentiable]
     float4x4 get(float4 position)
     {
-        float rs = 1.0;
-    
         float r = position[1];
         float theta = position[2];
     
@@ -75,7 +77,6 @@ struct SchwarzschildMetric : IMetric
     //https://www2.mpia-hd.mpg.de/homes/tmueller/pdfs/catalogue_2014-05-21.pdf 2.2.6
     Tetrad calculate_tetrad(float4 position)
     {
-        float rs = 1.0;
         float r = position[1];
         float theta = position[2];
     
@@ -85,6 +86,64 @@ struct SchwarzschildMetric : IMetric
         float4 ephi = float4(0.0, 0.0, 0.0, 1.0 / (r * sin(theta)));
     
         return {et, er, etheta, ephi};
+    }
+
+    bool is_below_event_horizon(float r)
+    {
+        return r <= (rs + 0.0001);
+    }
+};
+
+struct KerrMetric : IMetric
+{
+    static const float rs = 1.0;
+    static const float angular_momentum = -0.5;
+
+    [Differentiable]
+    float4x4 get(float4 position)
+    {
+        float r = position[1];
+        float theta = position[2];
+        float a = angular_momentum;
+        float Sigma = r*r + a*a*cos(theta)*cos(theta);
+        float Delta = r*r - rs*r + a*a;
+
+        float st2 = sin(theta) * sin(theta);
+
+        float4x4 m = float4x4(0.0);
+        m[0][0] = - (1.0 - (rs*r)/Sigma);
+        m[0][3] = - 0.5 * (2.0*rs*a*r*st2) / Sigma;
+        m[3][0] = - 0.5 * (2.0*rs*a*r*st2) / Sigma;
+        m[1][1] = Sigma / Delta;
+        m[2][2] = Sigma;
+        m[3][3] = (r*r + a*a + (rs*a*a*r*st2) / Sigma) * st2;
+        return m;
+    }
+
+    Tetrad calculate_tetrad(float4 position)
+    {
+       float r = position[1];
+       float theta = position[2];
+       float a = angular_momentum;
+       float Sigma = r*r + a*a*cos(theta)*cos(theta);
+       float Delta = r*r - rs*r + a*a;
+
+       float4 et = float4(rsqrt(1.0 - rs*r/Sigma), 0.0, 0.0, 0.0);
+       float4 er = float4(0.0, sqrt(Delta/Sigma), 0.0, 0.0);
+       float4 etheta = float4(0.0, 0.0, 1.0 / sqrt(Sigma), 0.0);
+       float4 ephi = float4(
+           rs*a*r*sin(theta) / (sqrt(1.0 - rs*r/Sigma) * sqrt(Delta) * Sigma),
+           0.0,
+           0.0,
+           sqrt(1.0-rs*r/Sigma) / (sqrt(Delta) * sin(theta))
+       );
+       return {et, er, etheta, ephi};
+    }
+
+    bool is_below_event_horizon(float r)
+    {
+        float r_plus = rs / 2.0 + sqrt((rs * rs) / 4 - angular_momentum * angular_momentum);
+        return r <= (r_plus + 0.0001);
     }
 };
 
@@ -191,7 +250,6 @@ IntegrationResult integrate(IMetric m, inout Geodesic g)
     result.type = HitType::UNFINISHED;
 
     float dt = 0.005;
-    float rs = 1.0;
     float start_time = g.position[0];
 
     for (int i = 0; i < 100000; i++) {
@@ -208,7 +266,7 @@ IntegrationResult integrate(IMetric m, inout Geodesic g)
             return result;
         }
 
-        if (radius <= rs + 0.0001 || g.position[0] > (start_time + 1000)) {
+        if (m.is_below_event_horizon(radius) || g.position[0] > (start_time + 1000)) {
             //ray has very likely hit the event horizon
             result.type = HitType::EVENT_HORIZON;
             return result;
