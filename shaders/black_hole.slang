@@ -249,14 +249,14 @@ IntegrationResult integrate(IMetric m, inout Geodesic g)
     IntegrationResult result;
     result.type = HitType::UNFINISHED;
 
-    float dt = 0.005;
+    float dl = 0.005;
     float start_time = g.position[0];
 
     for (int i = 0; i < 100000; i++) {
         float4 acceleration = calculate_schwarzschild_acceleration(m, g.position, g.velocity);
 
-        g.velocity += acceleration * dt;
-        g.position += g.velocity * dt;
+        g.velocity += acceleration * dl;
+        g.position += g.velocity * dl;
 
         float radius = g.position[1];
 
@@ -266,7 +266,7 @@ IntegrationResult integrate(IMetric m, inout Geodesic g)
             return result;
         }
 
-        if (m.is_below_event_horizon(radius) || g.position[0] > (start_time + 1000)) {
+        if (m.is_below_event_horizon(radius) || -g.position[0] > (start_time + 1000)) {
             //ray has very likely hit the event horizon
             result.type = HitType::EVENT_HORIZON;
             return result;
