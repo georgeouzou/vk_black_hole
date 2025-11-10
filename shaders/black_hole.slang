@@ -1,3 +1,5 @@
+import glsl;
+
 [[vk::binding(0, 0)]]
 Sampler2D background_img;
 
@@ -25,19 +27,6 @@ struct Geodesic
 };
 
 static const float PI = 3.1415926535;
-
-__generic<T : __BuiltinFloatingPointType, let N : int>
-[require(glsl_spirv, GLSL_400)]
-public matrix<T,N,N> inverse(matrix<T,N,N> m)
-{
-    __target_switch
-    {
-    case glsl: __intrinsic_asm "inverse";
-    case spirv: return spirv_asm {
-        OpExtInst $$matrix<T,N,N> result glsl450 MatrixInverse $m
-    };
-    }
-}
 
 interface IMetric
 {
