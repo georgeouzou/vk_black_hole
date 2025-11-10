@@ -283,12 +283,26 @@ float2 angle_to_tex(float2 angle)
     return { sxf, syf };
 }
 
+
+void float_controls()
+{
+    static const int mode = 0x1 | 0x2 | 0x4 | 0x8 | 0x10000 | 0x20000 | 0x40000;
+    spirv_asm
+    {
+        OpExtension "SPV_KHR_float_controls2";
+        OpCapability FloatControls2;
+        OpExecutionModeId $main FPFastMathDefault $$float $mode;
+    };
+}
+
+
 [shader("compute")]
 [numthreads(8, 8)]
 void main(
     uint2 tid: SV_DispatchThreadID
 )
 {
+    float_controls();
     uint width = pc.width;
     uint height = pc.height;
     

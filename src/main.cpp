@@ -158,9 +158,9 @@ void App::init_vk()
 
 	VkPhysicalDeviceMaintenance5FeaturesKHR m5f = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES_KHR, 0 };
 	m5f.maintenance5 = VK_TRUE;
+#if 0
 	//VkPhysicalDeviceFeatures2 f = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, 0 };
 	//f.pNext = &m5f;
-#if 0
 	VkPhysicalDeviceVulkan11Features v11f = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES, 0 };
 	v11f.storageBuffer16BitAccess = VK_TRUE;
 	VkPhysicalDeviceVulkan12Features v12f = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, 0 };
@@ -172,17 +172,22 @@ void App::init_vk()
     v13f.subgroupSizeControl = VK_TRUE;
     v13f.computeFullSubgroups = VK_TRUE;
 
+    VkPhysicalDeviceShaderFloatControls2FeaturesKHR fc2 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT_CONTROLS_2_FEATURES_KHR, 0 };
+    fc2.shaderFloatControls2 = VK_TRUE;
+
 	vkb::PhysicalDeviceSelector selector{ instance };
 	vkb::PhysicalDevice phys_dev = selector.
-//		prefer_gpu_device_type(vkb::PreferredDeviceType::integrated).
+		//prefer_gpu_device_type(vkb::PreferredDeviceType::integrated).
 		set_minimum_version(1, 3).
-//		set_required_features_11(v11f).
-//		set_required_features_12(v12f).
+		//set_required_features_11(v11f).
+		//set_required_features_12(v12f).
 		set_required_features_13(v13f).
 		add_required_extension_features(m5f).
+		add_required_extension_features(fc2).
 		add_required_extensions({
-			VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, 
-			VK_KHR_MAINTENANCE_5_EXTENSION_NAME, 
+            VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
+            VK_KHR_MAINTENANCE_5_EXTENSION_NAME, 
+            VK_KHR_SHADER_FLOAT_CONTROLS_2_EXTENSION_NAME
 		}).
 		select().value();
 
