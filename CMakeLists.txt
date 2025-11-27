@@ -14,6 +14,7 @@ set(src
 	src/vma.cpp
     src/stb_image.c
     src/stb_image_write.c
+    src/video_writer.cpp
 )
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/local_dirs.h.in" "${CMAKE_CURRENT_SOURCE_DIR}/src/local_dirs.h" @ONLY)

@@ -11,6 +11,7 @@
 #include "stb_image.h"
 #include "stb_image_write.h"
 #include "local_dirs.h"
+#include "video_writer.hpp"
 
 namespace vkext
 {
@@ -53,7 +54,7 @@ private:
     void create_background_image();
     void create_sampler();
     void create_output_image(uint32_t width, uint32_t height);
-	void render(uint32_t width, uint32_t height);
+	void render(VideoWriter &video, uint32_t width, uint32_t height);
 
     VkCommandBuffer begin_single_time_commands(
             VkQueue queue, VkCommandPool cmd_pool);
@@ -117,13 +118,19 @@ Buf create_buffer(VmaAllocator allocator, VkDeviceSize size, bool host_access)
 
 void App::run()
 {
+    uint32_t width = 1024;
+    uint32_t height = 768;
 	init_vk();
 	create_pipeline();
 	create_commands();
     create_background_image();
-    create_output_image(1920, 1080);
+    create_output_image(width, height);
     create_sampler();
-    render(1920,1080);
+
+    VideoWriter video(width, height, 4);
+    for (uint32_t i = 0; i < 300; ++i) {
+        render(video, width, height);
+    }
 	cleanup();
 }
 
@@ -444,7 +451,7 @@ void App::create_sampler()
     vkCreateSampler(m_device.device, &sci, nullptr, &m_sampler);
 }
 
-void App::render(uint32_t width, uint32_t height)
+void App::render(VideoWriter &video, uint32_t width, uint32_t height)
 {
 	Buf output_buf = create_buffer(m_allocator, 4*width*height, true);
 
@@ -531,7 +538,8 @@ void App::render(uint32_t width, uint32_t height)
 
 	//vkDeviceWaitIdle(m_device.device);
     
-    stbi_write_png("out.png", width, height, 4, output_buf.get_mapped_data<uint8_t>(), width*4);
+    //stbi_write_png("out.png", width, height, 4, output_buf.get_mapped_data<uint8_t>(), width*4);
+    video.write_frame(output_buf.get_mapped_data<uint8_t>());
 
 	vmaDestroyBuffer(m_allocator, output_buf.buffer, output_buf.allocation);
 }
