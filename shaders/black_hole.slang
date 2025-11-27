@@ -200,7 +200,7 @@ void calculate_christoffel(IMetric m, float4 position, out float4x4 Gamma[4])
     }
 }
 
-float4 calculate_schwarzschild_acceleration(IMetric m, float4 X, float4 v)
+float4 calculate_acceleration(IMetric m, float4 X, float4 v)
 {
     float4x4 gamma[4];
     calculate_christoffel(m, X, gamma);
@@ -242,7 +242,7 @@ IntegrationResult integrate(IMetric m, inout Geodesic g)
     float start_time = g.position[0];
 
     for (int i = 0; i < 100000; i++) {
-        float4 acceleration = calculate_schwarzschild_acceleration(m, g.position, g.velocity);
+        float4 acceleration = calculate_acceleration(m, g.position, g.velocity);
 
         g.velocity += acceleration * dl;
         g.position += g.velocity * dl;
