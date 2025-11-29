@@ -84,6 +84,20 @@ struct ParallelTransportPushConstants
     VkDeviceAddress out_e3s;
 };
 
+struct RenderPushConstants
+{
+    VkDeviceAddress positions;
+    VkDeviceAddress e0s;
+    VkDeviceAddress e1s;
+    VkDeviceAddress e2s;
+    VkDeviceAddress e3s;
+    VkDeviceAddress steps;
+    float desired_proper_time;
+    uint32_t width;
+    uint32_t height;
+    uint32_t pad;
+};
+
 class App
 {
 public:
@@ -96,14 +110,14 @@ private:
     void create_initial_tetrad_pipeline();
     void create_trace_geodesic_pipeline();
     void create_parallel_transport_pipeline();
-	void create_pipeline();
+	void create_render_pipeline();
 	void create_commands();
     void create_background_image();
     void create_sampler();
     void create_output_image(uint32_t width, uint32_t height);
 
     void trace_observer_geodesic();
-	void render(VideoWriter &video, uint32_t width, uint32_t height);
+    void render(VideoWriter& video, uint32_t width, uint32_t height, float proper_time);
 
     VkCommandBuffer begin_single_time_commands(
             VkQueue queue, VkCommandPool cmd_pool);
@@ -127,9 +141,9 @@ private:
     VkPipelineLayout m_parallel_transport_pipeline_layout;
     VkPipeline m_parallel_transport_pipeline;
 
-	VkDescriptorSetLayout m_desc_set_layout;
-	VkPipelineLayout m_pipeline_layout;
-	VkPipeline m_pipeline;
+	VkDescriptorSetLayout m_render_desc_set_layout;
+	VkPipelineLayout m_render_pipeline_layout;
+	VkPipeline m_render_pipeline;
 
 	VkCommandPool m_cmd_pool;
     VkSampler m_sampler;
@@ -206,17 +220,18 @@ void App::run()
     create_initial_tetrad_pipeline();
     create_trace_geodesic_pipeline();
     create_parallel_transport_pipeline();
-	create_pipeline();
+	create_render_pipeline();
 	create_commands();
     create_background_image();
     create_output_image(width, height);
     create_sampler();
 
     trace_observer_geodesic();
-#if 0
+#if 1
     VideoWriter video(width, height, 4);
-    for (uint32_t i = 0; i < 300; ++i) {
-        render(video, width, height);
+    for (uint32_t i = 0; i < 30*20; ++i) {
+        const float proper_time = i * 0.1f;
+        render(video, width, height, proper_time);
     }
 #endif
 	cleanup();
@@ -241,9 +256,9 @@ void App::cleanup()
     vkDestroyPipelineLayout(m_device.device, m_parallel_transport_pipeline_layout, nullptr);
     vkDestroyPipeline(m_device.device, m_parallel_transport_pipeline, nullptr);
 
-	vkDestroyDescriptorSetLayout(m_device.device, m_desc_set_layout, nullptr);
-	vkDestroyPipelineLayout(m_device.device, m_pipeline_layout, nullptr);
-	vkDestroyPipeline(m_device.device, m_pipeline, nullptr);
+	vkDestroyDescriptorSetLayout(m_device.device, m_render_desc_set_layout, nullptr);
+	vkDestroyPipelineLayout(m_device.device, m_render_pipeline_layout, nullptr);
+	vkDestroyPipeline(m_device.device, m_render_pipeline, nullptr);
 
     vmaDestroyBuffer(m_allocator, m_initial_tetrad_buf.buffer, m_initial_tetrad_buf.allocation);
     vmaDestroyBuffer(m_allocator, m_observer_positions_buf.buffer, m_observer_positions_buf.allocation);
@@ -421,7 +436,7 @@ void App::create_parallel_transport_pipeline()
 	vkCreateComputePipelines(m_device.device, VK_NULL_HANDLE, 1, &pci, nullptr, &m_parallel_transport_pipeline);
 }
 
-void App::create_pipeline()
+void App::create_render_pipeline()
 {
 	auto create_binding = [](uint32_t binding, VkDescriptorType type) {
 		VkDescriptorSetLayoutBinding b = {};
@@ -442,21 +457,21 @@ void App::create_pipeline()
 	dslci.bindingCount = bindings.size();
 	dslci.pBindings = bindings.data();
 
-	vkCreateDescriptorSetLayout(m_device.device, &dslci, nullptr, &m_desc_set_layout);
+	vkCreateDescriptorSetLayout(m_device.device, &dslci, nullptr, &m_render_desc_set_layout);
 
     VkPushConstantRange pcr = {};
     pcr.offset = 0;
-    pcr.size = 2 * sizeof(uint32_t);
+    pcr.size = sizeof(RenderPushConstants);
     pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
 	VkPipelineLayoutCreateInfo plci = {};
 	plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 	plci.setLayoutCount = 1;
-	plci.pSetLayouts = &m_desc_set_layout;
+	plci.pSetLayouts = &m_render_desc_set_layout;
     plci.pushConstantRangeCount = 1;
     plci.pPushConstantRanges = &pcr;
 
-	vkCreatePipelineLayout(m_device.device, &plci, nullptr, &m_pipeline_layout);
+	vkCreatePipelineLayout(m_device.device, &plci, nullptr, &m_render_pipeline_layout);
 
 	std::vector<uint32_t> shader_code = read_spv();
 	VkShaderModuleCreateInfo shader_module = {};
@@ -485,7 +500,7 @@ void App::create_pipeline()
 	VkPipelineShaderStageCreateInfo ssci = {};
 	ssci.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 	ssci.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-	ssci.pName = "main";
+	ssci.pName = "render_main";
     ssci.pNext = &shader_module;
 #if 0
     ssci.pSpecializationInfo = &specialization;
@@ -497,9 +512,9 @@ void App::create_pipeline()
 	VkComputePipelineCreateInfo pci = {};
 	pci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
 	pci.stage = ssci;
-	pci.layout = m_pipeline_layout;
+	pci.layout = m_render_pipeline_layout;
 
-	vkCreateComputePipelines(m_device.device, VK_NULL_HANDLE, 1, &pci, nullptr, &m_pipeline);
+	vkCreateComputePipelines(m_device.device, VK_NULL_HANDLE, 1, &pci, nullptr, &m_render_pipeline);
 }
 
 void App::create_commands()
@@ -657,7 +672,7 @@ void App::trace_observer_geodesic()
 {
     const uint32_t max_steps = 1024 * 1024;
     const float pi = std::numbers::pi_v<float>;
-    const std::array<float, 4> initial_camera_pos = { 0.0f, 8.0f, pi / 2.0f,  -pi / 2.0f };
+    const std::array<float, 4> initial_camera_pos = { 0.0f, 9.0f, pi / 2.0f,  -pi / 2.0f };
 
     m_initial_tetrad_buf = create_buffer(m_allocator, 4 * 4 * sizeof(float), false);
     m_observer_positions_buf = create_buffer(m_allocator, max_steps * 4 * sizeof(float), false);
@@ -732,7 +747,7 @@ void App::trace_observer_geodesic()
     end_single_time_commands(m_queue, m_cmd_pool, cmd_buf);
 }
 
-void App::render(VideoWriter &video, uint32_t width, uint32_t height)
+void App::render(VideoWriter &video, uint32_t width, uint32_t height, float proper_time)
 {
 	Buf output_buf = create_buffer(m_allocator, 4*width*height, true);
 
@@ -757,7 +772,7 @@ void App::render(VideoWriter &video, uint32_t width, uint32_t height)
         vkCmdPipelineBarrier2(cmd_buf, &dep);
     }
 
-	vkCmdBindPipeline(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
+	vkCmdBindPipeline(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, m_render_pipeline);
 
 	std::array<VkWriteDescriptorSet, 2> desc_writes = {};
 	std::array<VkDescriptorImageInfo, 2> image_desc_writes = {};
@@ -784,10 +799,28 @@ void App::render(VideoWriter &video, uint32_t width, uint32_t height)
         desc_writes[1].pImageInfo = &image_desc_writes[1];
     }
 
-    vkext::vkCmdPushDescriptorSetKHR(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline_layout, 0,
+    vkext::vkCmdPushDescriptorSetKHR(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, m_render_pipeline_layout, 0,
 		desc_writes.size(), desc_writes.data());
-    uint32_t pc[2] = { width, height };
-    vkCmdPushConstants(cmd_buf, m_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, 2*sizeof(uint32_t), &pc);
+    {
+        VkDeviceAddress observer_positions_address = m_observer_positions_buf.get_device_address(m_device);
+        VkDeviceAddress observer_velocities_address = m_observer_velocities_buf.get_device_address(m_device);
+        VkDeviceAddress observer_tetrad_e1_address = m_observer_tetrad_e1_buf.get_device_address(m_device);
+        VkDeviceAddress observer_tetrad_e2_address = m_observer_tetrad_e2_buf.get_device_address(m_device);
+        VkDeviceAddress observer_tetrad_e3_address = m_observer_tetrad_e3_buf.get_device_address(m_device);
+        VkDeviceAddress observer_steps_address = m_observer_steps_buf.get_device_address(m_device);
+
+        RenderPushConstants pc = {};
+        pc.positions = observer_positions_address;
+        pc.e0s = observer_velocities_address;
+        pc.e1s = observer_tetrad_e1_address;
+        pc.e2s = observer_tetrad_e2_address;
+        pc.e3s = observer_tetrad_e3_address;
+        pc.steps = observer_steps_address;
+        pc.desired_proper_time = proper_time;
+        pc.width = width;
+        pc.height = height;
+        vkCmdPushConstants(cmd_buf, m_render_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(RenderPushConstants), &pc);
+    }
 	vkCmdDispatch(cmd_buf, width/8, height/8, 1);
 
     {

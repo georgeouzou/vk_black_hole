@@ -1,20 +1,5 @@
 import glsl;
 
-[[vk::binding(0, 0)]]
-Sampler2D background_img;
-
-[[vk::binding(1, 0), vk::image_format("rgba8")]]
-RWTexture2D<float4> output_img;
-
-struct PushConstants
-{
-    uint width;
-    uint height;
-};
-
-[push_constant]
-ConstantBuffer<PushConstants> pc;
-
 struct Tetrad
 {
     float4 v[4];
@@ -466,25 +451,88 @@ void float_controls()
     {
         OpExtension "SPV_KHR_float_controls2";
         OpCapability FloatControls2;
-        OpExecutionModeId $main FPFastMathDefault $$float $mode;
+        OpExecutionModeId $render_main FPFastMathDefault $$float $mode;
     };
 }
 
+struct RenderPushConstants
+{
+    Ptr<float4, Access.Read> positions;
+    Ptr<float4, Access.Read> e0s;
+    Ptr<float4, Access.Read> e1s;
+    Ptr<float4, Access.Read> e2s;
+    Ptr<float4, Access.Read> e3s;
+    Ptr<uint, Access.Read> steps;
+    float desired_proper_time;
+    uint width;
+    uint height;
+    uint pad;
+};
+
+void interpolate(RenderPushConstants pc, out float4 position, out Tetrad tetrad)
+{
+    const uint steps = *pc.steps;
+    const float dt = s_trace_dt;
+
+    float elapsed_time = 0.0f;
+
+    if (pc.desired_proper_time <= 0.0) {
+        position = pc.positions[0];
+        tetrad.v[0] = pc.e0s[0];
+        tetrad.v[1] = pc.e1s[0];
+        tetrad.v[2] = pc.e2s[0];
+        tetrad.v[3] = pc.e3s[0];
+        return;
+    }
+
+    for (uint i = 0; i < (steps - 1); ++i) {
+        if (elapsed_time >= pc.desired_proper_time && elapsed_time <= pc.desired_proper_time + dt) {
+            float frac = (elapsed_time - pc.desired_proper_time) / dt;
+            position = mix(pc.positions[i], pc.positions[i + 1], frac);
+            tetrad.v[0] = mix(pc.e0s[i], pc.e0s[i + 1], frac);
+            tetrad.v[1] = mix(pc.e1s[i], pc.e1s[i + 1], frac);
+            tetrad.v[2] = mix(pc.e2s[i], pc.e2s[i + 1], frac);
+            tetrad.v[3] = mix(pc.e3s[i], pc.e3s[i + 1], frac);
+            return;
+        }
+        elapsed_time += dt;
+    }
+
+    position = pc.positions[steps-1];
+    tetrad.v[0] = pc.e0s[steps-1];
+    tetrad.v[1] = pc.e1s[steps-1];
+    tetrad.v[2] = pc.e2s[steps-1];
+    tetrad.v[3] = pc.e3s[steps-1];
+}
+
+[[vk::binding(0, 0)]]
+Sampler2D background_img;
+
+[[vk::binding(1, 0), vk::image_format("rgba8")]]
+RWTexture2D<float4> output_img;
+
 [shader("compute")]
 [numthreads(8, 8)]
-void main(
+void render_main(
+    uniform RenderPushConstants pc,
     uint2 tid: SV_DispatchThreadID
 )
 {
     float_controls();
     uint width = pc.width;
     uint height = pc.height;
-    
-    float3 ray_direction = get_ray_through_pixel(tid.x, tid.y, width, height, 90);
-    float4 camera_position = { 0.0 , 7.0, PI / 2.0, -PI / 2.0};
-
     SchwarzschildMetric metric;
+
+    float3 ray_direction = get_ray_through_pixel(tid.x, tid.y, width, height, 90);
+
+#if 0
+    float4 camera_position = { 0.0 , 7.0, PI / 2.0, -PI / 2.0 };
     Tetrad tetrads = metric.calculate_tetrad(camera_position);
+#else
+    float4 camera_position;
+    Tetrad tetrads;
+    interpolate(pc, camera_position, tetrads);
+#endif
 
     // the tetrad vectors give us a basis, that points in the direction t, r, theta, and phi
     // we'd like the ray to point towards the black hole: this means we make +z point towards -r, +y point towards +theta, and +x point towards +phi
