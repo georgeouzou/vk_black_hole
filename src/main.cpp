@@ -5,6 +5,7 @@
 #include <fstream>
 #include <cassert>
 #include <stdexcept>
+#include <numbers>
 
 #include <VkBootstrap.h>
 #include <vk_mem_alloc.h>
@@ -32,6 +33,13 @@ struct Buf
 		assert(info.pMappedData);
 		return reinterpret_cast<T*>(info.pMappedData);
 	}
+
+    VkDeviceAddress get_device_address(VkDevice device)
+    {
+        VkBufferDeviceAddressInfo ai = { VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO, 0 };
+        ai.buffer = buffer;
+        return vkGetBufferDeviceAddress(device, &ai);
+    }
 };
 
 struct Img
@@ -39,6 +47,15 @@ struct Img
     VkImage image;
     VkImageView image_view;
     VmaAllocation allocation;
+};
+
+struct InitialTetradPushConstants
+{
+    std::array<float, 4> camera_pos;
+    VkDeviceAddress tetrad_v0;
+    VkDeviceAddress tetrad_v1;
+    VkDeviceAddress tetrad_v2;
+    VkDeviceAddress tetrad_v3;
 };
 
 class App
@@ -49,11 +66,15 @@ public:
 private:
 	void init_vk();
 	void cleanup();
+
+    void create_initial_tetrad_pipeline();
 	void create_pipeline();
 	void create_commands();
     void create_background_image();
     void create_sampler();
     void create_output_image(uint32_t width, uint32_t height);
+
+    void trace_timelike_geodesic();
 	void render(VideoWriter &video, uint32_t width, uint32_t height);
 
     VkCommandBuffer begin_single_time_commands(
@@ -68,6 +89,10 @@ private:
 	vkb::PhysicalDevice m_physical_device;
 	vkb::Device m_device;
 	VkQueue m_queue;
+
+    VkPipelineLayout m_initial_tetrad_pipeline_layout;
+    VkPipeline m_initial_tetrad_pipeline;
+
 	VkDescriptorSetLayout m_desc_set_layout;
 	VkPipelineLayout m_pipeline_layout;
 	VkPipeline m_pipeline;
@@ -76,6 +101,8 @@ private:
     VkSampler m_sampler;
     Img m_background_img;
     Img m_output_img;
+ 
+    Buf m_initial_tetrad_buf;
 };
 
 namespace
@@ -99,7 +126,7 @@ std::vector<uint32_t> read_spv()
 Buf create_buffer(VmaAllocator allocator, VkDeviceSize size, bool host_access)
 {
 	VkBufferCreateInfo bci = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, 0 };
-	bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
 	bci.size = size;
 
 	VmaAllocationCreateInfo aci = {};
@@ -121,16 +148,20 @@ void App::run()
     uint32_t width = 1024;
     uint32_t height = 768;
 	init_vk();
+    create_initial_tetrad_pipeline();
 	create_pipeline();
 	create_commands();
     create_background_image();
     create_output_image(width, height);
     create_sampler();
 
+    trace_timelike_geodesic();
+#if 0
     VideoWriter video(width, height, 4);
     for (uint32_t i = 0; i < 300; ++i) {
         render(video, width, height);
     }
+#endif
 	cleanup();
 }
 
@@ -144,10 +175,14 @@ void App::cleanup()
 
 	vkDestroyCommandPool(m_device.device, m_cmd_pool, nullptr);
 
+    vkDestroyPipelineLayout(m_device.device, m_initial_tetrad_pipeline_layout, nullptr);
+    vkDestroyPipeline(m_device.device, m_initial_tetrad_pipeline, nullptr);
+
 	vkDestroyDescriptorSetLayout(m_device.device, m_desc_set_layout, nullptr);
 	vkDestroyPipelineLayout(m_device.device, m_pipeline_layout, nullptr);
 	vkDestroyPipeline(m_device.device, m_pipeline, nullptr);
 
+    vmaDestroyBuffer(m_allocator, m_initial_tetrad_buf.buffer, m_initial_tetrad_buf.allocation);
 	vmaDestroyAllocator(m_allocator);
 
 	vkb::destroy_device(m_device);
@@ -165,15 +200,8 @@ void App::init_vk()
 
 	VkPhysicalDeviceMaintenance5FeaturesKHR m5f = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES_KHR, 0 };
 	m5f.maintenance5 = VK_TRUE;
-#if 0
-	//VkPhysicalDeviceFeatures2 f = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, 0 };
-	//f.pNext = &m5f;
-	VkPhysicalDeviceVulkan11Features v11f = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES, 0 };
-	v11f.storageBuffer16BitAccess = VK_TRUE;
 	VkPhysicalDeviceVulkan12Features v12f = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, 0 };
-	v12f.shaderFloat16 = VK_TRUE;
-	v12f.descriptorBindingPartiallyBound = VK_TRUE;
-#endif
+	v12f.bufferDeviceAddress = VK_TRUE;
 	VkPhysicalDeviceVulkan13Features v13f = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, 0 };
 	v13f.synchronization2 = VK_TRUE;
     v13f.subgroupSizeControl = VK_TRUE;
@@ -186,8 +214,7 @@ void App::init_vk()
 	vkb::PhysicalDevice phys_dev = selector.
 		//prefer_gpu_device_type(vkb::PreferredDeviceType::integrated).
 		set_minimum_version(1, 3).
-		//set_required_features_11(v11f).
-		//set_required_features_12(v12f).
+		set_required_features_12(v12f).
 		set_required_features_13(v13f).
 		add_required_extension_features(m5f).
 		add_required_extension_features(fc2).
@@ -211,12 +238,48 @@ void App::init_vk()
 	vci.physicalDevice = phys_dev.physical_device;
 	vci.device = device.device;
 	vci.instance = instance.instance;
+    vci.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
 	vmaCreateAllocator(&vci, &m_allocator);
 
 	m_instance = instance;
 	m_physical_device = phys_dev;
 	m_device = device;
 	m_queue = device.get_queue(vkb::QueueType::graphics).value();
+}
+
+void App::create_initial_tetrad_pipeline()
+{
+    VkPushConstantRange pcr = {};
+    pcr.offset = 0;
+    pcr.size = sizeof(InitialTetradPushConstants);
+    pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+	VkPipelineLayoutCreateInfo plci = {};
+	plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+	plci.setLayoutCount = 0;
+    plci.pushConstantRangeCount = 1;
+    plci.pPushConstantRanges = &pcr;
+
+    vkCreatePipelineLayout(m_device.device, &plci, nullptr, &m_initial_tetrad_pipeline_layout);
+
+	std::vector<uint32_t> shader_code = read_spv();
+	VkShaderModuleCreateInfo shader_module = {};
+	shader_module.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+	shader_module.codeSize = shader_code.size() * sizeof(uint32_t);
+	shader_module.pCode = shader_code.data();
+
+	VkPipelineShaderStageCreateInfo ssci = {};
+	ssci.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+	ssci.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+	ssci.pName = "initial_tetrad_main";
+    ssci.pNext = &shader_module;
+
+	VkComputePipelineCreateInfo pci = {};
+	pci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+	pci.stage = ssci;
+    pci.layout = m_initial_tetrad_pipeline_layout;
+
+	vkCreateComputePipelines(m_device.device, VK_NULL_HANDLE, 1, &pci, nullptr, &m_initial_tetrad_pipeline);
 }
 
 void App::create_pipeline()
@@ -449,6 +512,29 @@ void App::create_sampler()
     sci.minLod = 0;
     sci.maxLod = VK_LOD_CLAMP_NONE;
     vkCreateSampler(m_device.device, &sci, nullptr, &m_sampler);
+}
+
+void App::trace_timelike_geodesic()
+{
+    m_initial_tetrad_buf = create_buffer(m_allocator, 4 * 4 * sizeof(float), false);
+    VkDeviceAddress initial_tetrad_address = m_initial_tetrad_buf.get_device_address(m_device);
+
+    std::array<float, 4> camera_pos = { 0.0f, 7.0f, std::numbers::pi_v<float> / 2.0f,  -std::numbers::pi_v<float> / 2.0f };
+    InitialTetradPushConstants pc = {};
+    pc.camera_pos = camera_pos;
+    pc.tetrad_v0 = initial_tetrad_address + 0 * (4 * sizeof(float));
+    pc.tetrad_v1 = initial_tetrad_address + 1 * (4 * sizeof(float));
+    pc.tetrad_v2 = initial_tetrad_address + 2 * (4 * sizeof(float));
+    pc.tetrad_v3 = initial_tetrad_address + 3 * (4 * sizeof(float));
+
+    auto cmd_buf = begin_single_time_commands(m_queue, m_cmd_pool);
+    vkCmdBindPipeline(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, m_initial_tetrad_pipeline);
+    vkCmdPushConstants(cmd_buf, m_initial_tetrad_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT,
+        0, sizeof(InitialTetradPushConstants), &pc);
+
+    vkCmdDispatch(cmd_buf, 1, 1, 1);
+
+    end_single_time_commands(m_queue, m_cmd_pool, cmd_buf);
 }
 
 void App::render(VideoWriter &video, uint32_t width, uint32_t height)

@@ -136,6 +136,181 @@ struct KerrMetric : IMetric
     }
 };
 
+float4 lower_index(float4x4 metric, float4 v)
+{
+    return mul(metric, v);
+}
+
+float dot_metric(float4x4 metric, float4 u, float4 v)
+{
+    float4 lowered = lower_index(metric, u);
+    return dot(lowered, v);
+}
+
+float4 gram_project(float4x4 metric, float4 u, float4 v)
+{
+    float top = dot_metric(metric, u, v);
+    float bottom = dot_metric(metric, u, u);
+    return (top / bottom) * u;
+}
+
+float4 normalize(float4x4 metric, float4 v)
+{
+    float d = dot_metric(metric, v, v);
+
+    // d will be < 0 for timelike vectors
+    return v * rsqrt(abs(d));
+}
+
+Tetrad gram_schmidt(float4x4 metric, float4 v0, float4 v1, float4 v2, float4 v3)
+{
+    float4 u0 = v0;
+
+    float4 u1 = v1;
+    u1 -= gram_project(metric, u0, u1);
+
+    float4 u2 = v2;
+    u2 -= gram_project(metric, u0, u2);
+    u2 -= gram_project(metric, u1, u2);
+
+    float4 u3 = v3;
+    u3 -= gram_project(metric, u0, u3);
+    u3 -= gram_project(metric, u1, u3);
+    u3 -= gram_project(metric, u2, u3);
+
+    u0 = normalize(metric, u0);
+    u1 = normalize(metric, u1);
+    u2 = normalize(metric, u2);
+    u3 = normalize(metric, u3);
+
+    return { u0, u1, u2, u3 };
+}
+
+float4x4 get_local_minkowski(Tetrad tetrads, float4x4 metric)
+{
+    // h = eT*g*e
+    // matrix e makes up our tetrad vectors as column vectors
+
+    float4x4 m;
+    for (uint i = 0; i < 4; ++i) {
+        m[0][i] = tetrads.v[0][i];
+        m[1][i] = tetrads.v[1][i];
+        m[2][i] = tetrads.v[2][i];
+        m[3][i] = tetrads.v[3][i];
+    }
+
+    float4x4 minkowski;
+    for (uint a = 0; a < 4; ++a) {
+        for (uint b = 0; b < 4; ++b) {
+            float sum = 0;
+            for (uint mu = 0; mu < 4; ++mu) {
+                for (uint mv = 0; mv < 4; ++mv) {
+                    sum += metric[mu][mv] * m[a][mu] * m[b][mv];
+                }
+            }
+            minkowski[a][b] = sum;
+        }
+    }
+    return minkowski;
+}
+
+uint calculate_which_coordinate_is_timelike(Tetrad tetrads, float4x4 metric)
+{
+    float4x4 minkowski = get_local_minkowski(tetrads, metric);
+    uint lowest_index = 0;
+    float lowest_value = 0.0;
+
+    // look for the largest negative value
+    for (uint i = 0; i < 4; ++i) {
+        if (minkowski[i][i] < lowest_value) {
+            lowest_index = i;
+            lowest_value = minkowski[i][i];
+        }
+    }
+    return lowest_index;
+}
+
+bool approximately_equal(float v1, float v2)
+{
+    float bound = 0.0001;
+    return v1 >= (v2 - bound) && v1 < (v2 + bound);
+}
+
+void swap<T>(inout T v1, inout T v2) where T : IArithmetic
+{
+    T temp = v2;
+    v2 = v1;
+    v1 = temp;
+}
+
+struct InitialTetradPushConstants
+{
+    float4 camera_pos;
+    float4 *e0;
+    float4 *e1;
+    float4 *e2;
+    float4 *e3;
+};
+
+[shader("compute")]
+[numthreads(1, 1)]
+void initial_tetrad_main(uniform InitialTetradPushConstants pc)
+{
+    SchwarzschildMetric m;
+
+    float4 v0 = { 1.0, 0.0, 0.0, 0.0 };
+    float4 v1 = { 0.0, 1.0, 0.0, 0.0 };
+    float4 v2 = { 0.0, 0.0, 1.0, 0.0 };
+    float4 v3 = { 0.0, 0.0, 0.0, 1.0 };
+
+    float4x4 metric = get_metric(m, pc.camera_pos);
+
+    float4 as_array[4] = { v0, v1, v2, v3 };
+    float lengths[4] = { 
+        dot_metric(metric, v0, v0),
+        dot_metric(metric, v1, v1),
+        dot_metric(metric, v2, v2),
+        dot_metric(metric, v3, v3)
+    };
+
+    uint first_nonzero_idx = 0;
+    for (uint i = 0; i < 4; ++i) {
+        if (!approximately_equal(lengths[i], 0.0)) {
+            first_nonzero_idx = i;
+            break;
+        }
+    }
+
+    swap(as_array[0], as_array[first_nonzero_idx]);
+
+    float4 iv0 = as_array[0];
+    float4 iv1 = as_array[1];
+    float4 iv2 = as_array[2];
+    float4 iv3 = as_array[3];
+
+    Tetrad tetrad = gram_schmidt(metric, iv0, iv1, iv2, iv3);
+
+    swap(tetrad.v[0], tetrad.v[first_nonzero_idx]);
+
+    uint32_t timelike_coord_idx = calculate_which_coordinate_is_timelike(tetrad, metric);
+    swap(tetrad.v[0], tetrad.v[timelike_coord_idx]);
+
+    *pc.e0 = tetrad.v[0];
+    *pc.e1 = tetrad.v[1];
+    *pc.e2 = tetrad.v[2];
+    *pc.e3 = tetrad.v[3];
+
+    printf("Tetrad\n"
+    "%f, %f, %f, %f\n"
+    "%f, %f, %f, %f\n"
+    "%f, %f, %f, %f\n"
+    "%f, %f, %f, %f\n",
+    tetrad.v[0][0], tetrad.v[0][1], tetrad.v[0][2], tetrad.v[0][3],
+    tetrad.v[1][0], tetrad.v[1][1], tetrad.v[1][2], tetrad.v[1][3],
+    tetrad.v[2][0], tetrad.v[2][1], tetrad.v[2][2], tetrad.v[2][3],
+    tetrad.v[3][0], tetrad.v[3][1], tetrad.v[3][2], tetrad.v[3][3]);
+}
+
 float3 get_ray_through_pixel(uint sx, uint sy, uint width, uint height, float fov_degrees)
 {
     float fov_rad = (fov_degrees / 360.) * 2.0 * PI;
@@ -283,7 +458,6 @@ float2 angle_to_tex(float2 angle)
     return { sxf, syf };
 }
 
-
 void float_controls()
 {
     static const int mode = 0x1 | 0x2 | 0x4 | 0x8 | 0x10000 | 0x20000 | 0x40000;
@@ -294,7 +468,6 @@ void float_controls()
         OpExecutionModeId $main FPFastMathDefault $$float $mode;
     };
 }
-
 
 [shader("compute")]
 [numthreads(8, 8)]
@@ -307,7 +480,7 @@ void main(
     uint height = pc.height;
     
     float3 ray_direction = get_ray_through_pixel(tid.x, tid.y, width, height, 90);
-    float4 camera_position = { 0.0 , 8.0, PI / 2.0, -PI / 2.0};
+    float4 camera_position = { 0.0 , 7.0, PI / 2.0, -PI / 2.0};
 
     SchwarzschildMetric metric;
     Tetrad tetrads = metric.calculate_tetrad(camera_position);
@@ -331,4 +504,13 @@ void main(
         color = background_img.SampleLevel(texcoord, 0.0).rgb;
     }
     output_img.Store(tid, float4(color, 1.0));
+}
+
+bool geodesic_should_terminate(float4 start, float4 position, float4 velocity)
+{
+    bool is_broken = any(isinf(position)) || any(isinf(velocity));
+    bool escaped = position[1] > 10.0;
+    bool took_too_much_time = -position[0] > start[0] + 1000;
+    bool too_fast = abs(velocity[0]) >= 10.0;
+    return escaped || took_too_much_time || too_fast || is_broken || position[1] < 0.1;
 }
