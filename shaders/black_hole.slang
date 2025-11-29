@@ -566,3 +566,70 @@ void trace_geodesic_main(uniform TraceGeodesicPushConstants pc)
 
     *pc.out_steps = step + 1;
 }
+
+float4 parallel_transport_get_change(float4 tangent_vector, float4 geodesic_velocity, float4x4 Gamma[4])
+{
+    float4 dAdt;
+    for (uint a = 0; a < 4; ++a) {
+        float sum = 0;
+        for (uint b = 0; b < 4; ++b) {
+            for (uint s = 0; s < 4; ++s) {
+                sum += Gamma[a][b][s] * tangent_vector[b] * geodesic_velocity[s];
+            }
+        }
+        dAdt[a] = -sum;
+    }
+    return dAdt;
+}
+
+struct ParallelTransportPushConstants
+{
+    Ptr<float4, Access.Read> e1;
+    Ptr<float4, Access.Read> e2;
+    Ptr<float4, Access.Read> e3;
+    Ptr<float4, Access.Read> positions;
+    Ptr<float4, Access.Read> velocities;
+    Ptr<uint, Access.Read> steps;
+    float4 *out_e1s;
+    float4 *out_e2s;
+    float4 *out_e3s;
+};
+
+[shader("compute")]
+[numthreads(3, 1, 1)]
+void parallel_transport_tetrads(uint lid : SV_GroupThreadID, uniform ParallelTransportPushConstants pc)
+{
+    SchwarzschildMetric metric;
+    const float dt = s_trace_dt;
+
+    uint steps = *pc.steps;
+
+    float4 e[3] = {
+        *pc.e1,
+        *pc.e2,
+        *pc.e3,
+    };
+
+    Ptr<float4> out_e[3] = {
+        pc.out_e1s,
+        pc.out_e2s,
+        pc.out_e3s,
+    };
+
+    float4 current_e = e[lid];
+
+    for (uint i = 0; i < steps; ++i) {
+        //printf("e%u s:%u {%f, %f, %f, %f}\n", lid, i, current_e.x, current_e.y, current_e.z, current_e.w);
+        out_e[lid][i] = current_e;
+
+        float4 current_position = pc.positions[i];
+        float4 current_velocity = pc.velocities[i];
+
+        float4x4 Gamma[4];
+        calculate_christoffel(metric, current_position, Gamma);
+
+        float4 e_change = parallel_transport_get_change(current_e, current_velocity, Gamma);
+        current_e += e_change * dt;
+
+    }
+}

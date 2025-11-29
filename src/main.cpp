@@ -52,10 +52,10 @@ struct Img
 struct InitialTetradPushConstants
 {
     std::array<float, 4> pos;
-    VkDeviceAddress tetrad_v0;
-    VkDeviceAddress tetrad_v1;
-    VkDeviceAddress tetrad_v2;
-    VkDeviceAddress tetrad_v3;
+    VkDeviceAddress tetrad_e0;
+    VkDeviceAddress tetrad_e1;
+    VkDeviceAddress tetrad_e2;
+    VkDeviceAddress tetrad_e3;
 };
 
 struct TraceGeodesicPushConstants
@@ -71,6 +71,18 @@ struct TraceGeodesicPushConstants
     VkDeviceAddress out_steps;
 };
 
+struct ParallelTransportPushConstants
+{
+    VkDeviceAddress e1;
+    VkDeviceAddress e2;
+    VkDeviceAddress e3;
+    VkDeviceAddress positions;
+    VkDeviceAddress velocities;
+    VkDeviceAddress steps;
+    VkDeviceAddress out_e1s;
+    VkDeviceAddress out_e2s;
+    VkDeviceAddress out_e3s;
+};
 
 class App
 {
@@ -83,6 +95,7 @@ private:
 
     void create_initial_tetrad_pipeline();
     void create_trace_geodesic_pipeline();
+    void create_parallel_transport_pipeline();
 	void create_pipeline();
 	void create_commands();
     void create_background_image();
@@ -111,6 +124,9 @@ private:
     VkPipelineLayout m_trace_geodesic_pipeline_layout;
     VkPipeline m_trace_geodesic_pipeline;
 
+    VkPipelineLayout m_parallel_transport_pipeline_layout;
+    VkPipeline m_parallel_transport_pipeline;
+
 	VkDescriptorSetLayout m_desc_set_layout;
 	VkPipelineLayout m_pipeline_layout;
 	VkPipeline m_pipeline;
@@ -123,6 +139,9 @@ private:
     Buf m_initial_tetrad_buf;
     Buf m_observer_positions_buf;
     Buf m_observer_velocities_buf;
+    Buf m_observer_tetrad_e1_buf;
+    Buf m_observer_tetrad_e2_buf;
+    Buf m_observer_tetrad_e3_buf;
     Buf m_observer_steps_buf;
 };
 
@@ -186,6 +205,7 @@ void App::run()
 	init_vk();
     create_initial_tetrad_pipeline();
     create_trace_geodesic_pipeline();
+    create_parallel_transport_pipeline();
 	create_pipeline();
 	create_commands();
     create_background_image();
@@ -218,6 +238,9 @@ void App::cleanup()
     vkDestroyPipelineLayout(m_device.device, m_trace_geodesic_pipeline_layout, nullptr);
     vkDestroyPipeline(m_device.device, m_trace_geodesic_pipeline, nullptr);
 
+    vkDestroyPipelineLayout(m_device.device, m_parallel_transport_pipeline_layout, nullptr);
+    vkDestroyPipeline(m_device.device, m_parallel_transport_pipeline, nullptr);
+
 	vkDestroyDescriptorSetLayout(m_device.device, m_desc_set_layout, nullptr);
 	vkDestroyPipelineLayout(m_device.device, m_pipeline_layout, nullptr);
 	vkDestroyPipeline(m_device.device, m_pipeline, nullptr);
@@ -226,6 +249,9 @@ void App::cleanup()
     vmaDestroyBuffer(m_allocator, m_observer_positions_buf.buffer, m_observer_positions_buf.allocation);
     vmaDestroyBuffer(m_allocator, m_observer_velocities_buf.buffer, m_observer_velocities_buf.allocation);
     vmaDestroyBuffer(m_allocator, m_observer_steps_buf.buffer, m_observer_steps_buf.allocation);
+    vmaDestroyBuffer(m_allocator, m_observer_tetrad_e1_buf.buffer, m_observer_tetrad_e1_buf.allocation);
+    vmaDestroyBuffer(m_allocator, m_observer_tetrad_e2_buf.buffer, m_observer_tetrad_e2_buf.allocation);
+    vmaDestroyBuffer(m_allocator, m_observer_tetrad_e3_buf.buffer, m_observer_tetrad_e3_buf.allocation);
 	vmaDestroyAllocator(m_allocator);
 
 	vkb::destroy_device(m_device);
@@ -358,6 +384,41 @@ void App::create_trace_geodesic_pipeline()
     pci.layout = m_trace_geodesic_pipeline_layout;
 
 	vkCreateComputePipelines(m_device.device, VK_NULL_HANDLE, 1, &pci, nullptr, &m_trace_geodesic_pipeline);
+}
+
+void App::create_parallel_transport_pipeline()
+{
+    VkPushConstantRange pcr = {};
+    pcr.offset = 0;
+    pcr.size = sizeof(ParallelTransportPushConstants);
+    pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+	VkPipelineLayoutCreateInfo plci = {};
+	plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+	plci.setLayoutCount = 0;
+    plci.pushConstantRangeCount = 1;
+    plci.pPushConstantRanges = &pcr;
+
+    vkCreatePipelineLayout(m_device.device, &plci, nullptr, &m_parallel_transport_pipeline_layout);
+
+	std::vector<uint32_t> shader_code = read_spv();
+	VkShaderModuleCreateInfo shader_module = {};
+	shader_module.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+	shader_module.codeSize = shader_code.size() * sizeof(uint32_t);
+	shader_module.pCode = shader_code.data();
+
+	VkPipelineShaderStageCreateInfo ssci = {};
+	ssci.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+	ssci.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+	ssci.pName = "parallel_transport_tetrads";
+    ssci.pNext = &shader_module;
+
+	VkComputePipelineCreateInfo pci = {};
+	pci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+	pci.stage = ssci;
+    pci.layout = m_parallel_transport_pipeline_layout;
+
+	vkCreateComputePipelines(m_device.device, VK_NULL_HANDLE, 1, &pci, nullptr, &m_parallel_transport_pipeline);
 }
 
 void App::create_pipeline()
@@ -602,21 +663,27 @@ void App::trace_observer_geodesic()
     m_observer_positions_buf = create_buffer(m_allocator, max_steps * 4 * sizeof(float), false);
     m_observer_velocities_buf = create_buffer(m_allocator, max_steps * 4 * sizeof(float), false);
     m_observer_steps_buf = create_buffer(m_allocator, sizeof(uint32_t), false);
+    m_observer_tetrad_e1_buf = create_buffer(m_allocator, max_steps * 4 * sizeof(float), false);
+    m_observer_tetrad_e2_buf = create_buffer(m_allocator, max_steps * 4 * sizeof(float), false);
+    m_observer_tetrad_e3_buf = create_buffer(m_allocator, max_steps * 4 * sizeof(float), false);
 
     VkDeviceAddress initial_tetrad_address = m_initial_tetrad_buf.get_device_address(m_device);
     VkDeviceAddress observer_positions_address = m_observer_positions_buf.get_device_address(m_device);
     VkDeviceAddress observer_velocities_address = m_observer_velocities_buf.get_device_address(m_device);
     VkDeviceAddress observer_steps_address = m_observer_steps_buf.get_device_address(m_device);
+    VkDeviceAddress observer_tetrad_e1_address = m_observer_tetrad_e1_buf.get_device_address(m_device);
+    VkDeviceAddress observer_tetrad_e2_address = m_observer_tetrad_e2_buf.get_device_address(m_device);
+    VkDeviceAddress observer_tetrad_e3_address = m_observer_tetrad_e3_buf.get_device_address(m_device);
     
     auto cmd_buf = begin_single_time_commands(m_queue, m_cmd_pool);
 
     {
         InitialTetradPushConstants pc = {};
         pc.pos = initial_camera_pos;
-        pc.tetrad_v0 = initial_tetrad_address + 0 * (4 * sizeof(float));
-        pc.tetrad_v1 = initial_tetrad_address + 1 * (4 * sizeof(float));
-        pc.tetrad_v2 = initial_tetrad_address + 2 * (4 * sizeof(float));
-        pc.tetrad_v3 = initial_tetrad_address + 3 * (4 * sizeof(float));
+        pc.tetrad_e0 = initial_tetrad_address + 0 * (4 * sizeof(float));
+        pc.tetrad_e1 = initial_tetrad_address + 1 * (4 * sizeof(float));
+        pc.tetrad_e2 = initial_tetrad_address + 2 * (4 * sizeof(float));
+        pc.tetrad_e3 = initial_tetrad_address + 3 * (4 * sizeof(float));
 
         vkCmdBindPipeline(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, m_initial_tetrad_pipeline);
         vkCmdPushConstants(cmd_buf, m_initial_tetrad_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT,
@@ -630,7 +697,7 @@ void App::trace_observer_geodesic()
     {
         TraceGeodesicPushConstants pc = {};
         pc.start_position = initial_camera_pos;
-        pc.start_velocity = initial_tetrad_address; // the first timelike tetrad component (e0)
+        pc.start_velocity = initial_tetrad_address; // the trace the first timelike tetrad component (e0)
         pc.max_steps = max_steps;
         pc.out_positions = observer_positions_address;
         pc.out_velocities = observer_velocities_address;
@@ -639,6 +706,26 @@ void App::trace_observer_geodesic()
         vkCmdBindPipeline(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, m_trace_geodesic_pipeline);
         vkCmdPushConstants(cmd_buf, m_trace_geodesic_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT,
             0, sizeof(TraceGeodesicPushConstants), &pc);
+        vkCmdDispatch(cmd_buf, 1, 1, 1);
+    }
+
+    compute_barrier(cmd_buf);
+
+    {
+        ParallelTransportPushConstants pc = {};
+        pc.e1 = initial_tetrad_address + 1 * (4 * sizeof(float));
+        pc.e2 = initial_tetrad_address + 2 * (4 * sizeof(float));
+        pc.e3 = initial_tetrad_address + 3 * (4 * sizeof(float));
+        pc.positions = observer_positions_address;
+        pc.velocities = observer_velocities_address;
+        pc.steps = observer_steps_address;
+        pc.out_e1s = observer_tetrad_e1_address;
+        pc.out_e2s = observer_tetrad_e2_address;
+        pc.out_e3s = observer_tetrad_e3_address;
+
+        vkCmdBindPipeline(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, m_parallel_transport_pipeline);
+        vkCmdPushConstants(cmd_buf, m_parallel_transport_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT,
+            0, sizeof(ParallelTransportPushConstants), &pc);
         vkCmdDispatch(cmd_buf, 1, 1, 1);
     }
 
