@@ -51,12 +51,26 @@ struct Img
 
 struct InitialTetradPushConstants
 {
-    std::array<float, 4> camera_pos;
+    std::array<float, 4> pos;
     VkDeviceAddress tetrad_v0;
     VkDeviceAddress tetrad_v1;
     VkDeviceAddress tetrad_v2;
     VkDeviceAddress tetrad_v3;
 };
+
+struct TraceGeodesicPushConstants
+{
+    std::array<float, 4> start_position;
+    uint32_t max_steps;
+    uint32_t pad0;
+    uint32_t pad1;
+    uint32_t pad2;
+    VkDeviceAddress start_velocity;
+    VkDeviceAddress out_positions;
+    VkDeviceAddress out_velocities;
+    VkDeviceAddress out_steps;
+};
+
 
 class App
 {
@@ -68,13 +82,14 @@ private:
 	void cleanup();
 
     void create_initial_tetrad_pipeline();
+    void create_trace_geodesic_pipeline();
 	void create_pipeline();
 	void create_commands();
     void create_background_image();
     void create_sampler();
     void create_output_image(uint32_t width, uint32_t height);
 
-    void trace_timelike_geodesic();
+    void trace_observer_geodesic();
 	void render(VideoWriter &video, uint32_t width, uint32_t height);
 
     VkCommandBuffer begin_single_time_commands(
@@ -93,6 +108,9 @@ private:
     VkPipelineLayout m_initial_tetrad_pipeline_layout;
     VkPipeline m_initial_tetrad_pipeline;
 
+    VkPipelineLayout m_trace_geodesic_pipeline_layout;
+    VkPipeline m_trace_geodesic_pipeline;
+
 	VkDescriptorSetLayout m_desc_set_layout;
 	VkPipelineLayout m_pipeline_layout;
 	VkPipeline m_pipeline;
@@ -103,6 +121,9 @@ private:
     Img m_output_img;
  
     Buf m_initial_tetrad_buf;
+    Buf m_observer_positions_buf;
+    Buf m_observer_velocities_buf;
+    Buf m_observer_steps_buf;
 };
 
 namespace
@@ -141,6 +162,21 @@ Buf create_buffer(VmaAllocator allocator, VkDeviceSize size, bool host_access)
 	return { buffer, allocation, allocation_info };
 }
 
+void compute_barrier(VkCommandBuffer cmd_buf)
+{
+    VkMemoryBarrier2 bar = { VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, 0 };
+    bar.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    bar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    bar.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    bar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+
+   VkDependencyInfo dep = {};
+   dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+   dep.memoryBarrierCount = 1;
+   dep.pMemoryBarriers = &bar;
+   vkCmdPipelineBarrier2(cmd_buf, &dep);
+}
+
 }
 
 void App::run()
@@ -149,13 +185,14 @@ void App::run()
     uint32_t height = 768;
 	init_vk();
     create_initial_tetrad_pipeline();
+    create_trace_geodesic_pipeline();
 	create_pipeline();
 	create_commands();
     create_background_image();
     create_output_image(width, height);
     create_sampler();
 
-    trace_timelike_geodesic();
+    trace_observer_geodesic();
 #if 0
     VideoWriter video(width, height, 4);
     for (uint32_t i = 0; i < 300; ++i) {
@@ -178,11 +215,17 @@ void App::cleanup()
     vkDestroyPipelineLayout(m_device.device, m_initial_tetrad_pipeline_layout, nullptr);
     vkDestroyPipeline(m_device.device, m_initial_tetrad_pipeline, nullptr);
 
+    vkDestroyPipelineLayout(m_device.device, m_trace_geodesic_pipeline_layout, nullptr);
+    vkDestroyPipeline(m_device.device, m_trace_geodesic_pipeline, nullptr);
+
 	vkDestroyDescriptorSetLayout(m_device.device, m_desc_set_layout, nullptr);
 	vkDestroyPipelineLayout(m_device.device, m_pipeline_layout, nullptr);
 	vkDestroyPipeline(m_device.device, m_pipeline, nullptr);
 
     vmaDestroyBuffer(m_allocator, m_initial_tetrad_buf.buffer, m_initial_tetrad_buf.allocation);
+    vmaDestroyBuffer(m_allocator, m_observer_positions_buf.buffer, m_observer_positions_buf.allocation);
+    vmaDestroyBuffer(m_allocator, m_observer_velocities_buf.buffer, m_observer_velocities_buf.allocation);
+    vmaDestroyBuffer(m_allocator, m_observer_steps_buf.buffer, m_observer_steps_buf.allocation);
 	vmaDestroyAllocator(m_allocator);
 
 	vkb::destroy_device(m_device);
@@ -280,6 +323,41 @@ void App::create_initial_tetrad_pipeline()
     pci.layout = m_initial_tetrad_pipeline_layout;
 
 	vkCreateComputePipelines(m_device.device, VK_NULL_HANDLE, 1, &pci, nullptr, &m_initial_tetrad_pipeline);
+}
+
+void App::create_trace_geodesic_pipeline()
+{
+    VkPushConstantRange pcr = {};
+    pcr.offset = 0;
+    pcr.size = sizeof(TraceGeodesicPushConstants);
+    pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+	VkPipelineLayoutCreateInfo plci = {};
+	plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+	plci.setLayoutCount = 0;
+    plci.pushConstantRangeCount = 1;
+    plci.pPushConstantRanges = &pcr;
+
+    vkCreatePipelineLayout(m_device.device, &plci, nullptr, &m_trace_geodesic_pipeline_layout);
+
+	std::vector<uint32_t> shader_code = read_spv();
+	VkShaderModuleCreateInfo shader_module = {};
+	shader_module.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+	shader_module.codeSize = shader_code.size() * sizeof(uint32_t);
+	shader_module.pCode = shader_code.data();
+
+	VkPipelineShaderStageCreateInfo ssci = {};
+	ssci.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+	ssci.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+	ssci.pName = "trace_geodesic_main";
+    ssci.pNext = &shader_module;
+
+	VkComputePipelineCreateInfo pci = {};
+	pci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+	pci.stage = ssci;
+    pci.layout = m_trace_geodesic_pipeline_layout;
+
+	vkCreateComputePipelines(m_device.device, VK_NULL_HANDLE, 1, &pci, nullptr, &m_trace_geodesic_pipeline);
 }
 
 void App::create_pipeline()
@@ -514,25 +592,55 @@ void App::create_sampler()
     vkCreateSampler(m_device.device, &sci, nullptr, &m_sampler);
 }
 
-void App::trace_timelike_geodesic()
+void App::trace_observer_geodesic()
 {
+    const uint32_t max_steps = 1024 * 1024;
+    const float pi = std::numbers::pi_v<float>;
+    const std::array<float, 4> initial_camera_pos = { 0.0f, 8.0f, pi / 2.0f,  -pi / 2.0f };
+
     m_initial_tetrad_buf = create_buffer(m_allocator, 4 * 4 * sizeof(float), false);
+    m_observer_positions_buf = create_buffer(m_allocator, max_steps * 4 * sizeof(float), false);
+    m_observer_velocities_buf = create_buffer(m_allocator, max_steps * 4 * sizeof(float), false);
+    m_observer_steps_buf = create_buffer(m_allocator, sizeof(uint32_t), false);
+
     VkDeviceAddress initial_tetrad_address = m_initial_tetrad_buf.get_device_address(m_device);
-
-    std::array<float, 4> camera_pos = { 0.0f, 7.0f, std::numbers::pi_v<float> / 2.0f,  -std::numbers::pi_v<float> / 2.0f };
-    InitialTetradPushConstants pc = {};
-    pc.camera_pos = camera_pos;
-    pc.tetrad_v0 = initial_tetrad_address + 0 * (4 * sizeof(float));
-    pc.tetrad_v1 = initial_tetrad_address + 1 * (4 * sizeof(float));
-    pc.tetrad_v2 = initial_tetrad_address + 2 * (4 * sizeof(float));
-    pc.tetrad_v3 = initial_tetrad_address + 3 * (4 * sizeof(float));
-
+    VkDeviceAddress observer_positions_address = m_observer_positions_buf.get_device_address(m_device);
+    VkDeviceAddress observer_velocities_address = m_observer_velocities_buf.get_device_address(m_device);
+    VkDeviceAddress observer_steps_address = m_observer_steps_buf.get_device_address(m_device);
+    
     auto cmd_buf = begin_single_time_commands(m_queue, m_cmd_pool);
-    vkCmdBindPipeline(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, m_initial_tetrad_pipeline);
-    vkCmdPushConstants(cmd_buf, m_initial_tetrad_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT,
-        0, sizeof(InitialTetradPushConstants), &pc);
 
-    vkCmdDispatch(cmd_buf, 1, 1, 1);
+    {
+        InitialTetradPushConstants pc = {};
+        pc.pos = initial_camera_pos;
+        pc.tetrad_v0 = initial_tetrad_address + 0 * (4 * sizeof(float));
+        pc.tetrad_v1 = initial_tetrad_address + 1 * (4 * sizeof(float));
+        pc.tetrad_v2 = initial_tetrad_address + 2 * (4 * sizeof(float));
+        pc.tetrad_v3 = initial_tetrad_address + 3 * (4 * sizeof(float));
+
+        vkCmdBindPipeline(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, m_initial_tetrad_pipeline);
+        vkCmdPushConstants(cmd_buf, m_initial_tetrad_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT,
+            0, sizeof(InitialTetradPushConstants), &pc);
+
+        vkCmdDispatch(cmd_buf, 1, 1, 1);
+    }
+
+    compute_barrier(cmd_buf);
+
+    {
+        TraceGeodesicPushConstants pc = {};
+        pc.start_position = initial_camera_pos;
+        pc.start_velocity = initial_tetrad_address; // the first timelike tetrad component (e0)
+        pc.max_steps = max_steps;
+        pc.out_positions = observer_positions_address;
+        pc.out_velocities = observer_velocities_address;
+        pc.out_steps = observer_steps_address;
+
+        vkCmdBindPipeline(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, m_trace_geodesic_pipeline);
+        vkCmdPushConstants(cmd_buf, m_trace_geodesic_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT,
+            0, sizeof(TraceGeodesicPushConstants), &pc);
+        vkCmdDispatch(cmd_buf, 1, 1, 1);
+    }
 
     end_single_time_commands(m_queue, m_cmd_pool, cmd_buf);
 }

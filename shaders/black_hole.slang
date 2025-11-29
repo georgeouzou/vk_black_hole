@@ -245,7 +245,7 @@ void swap<T>(inout T v1, inout T v2) where T : IArithmetic
 
 struct InitialTetradPushConstants
 {
-    float4 camera_pos;
+    float4 pos;
     float4 *e0;
     float4 *e1;
     float4 *e2;
@@ -263,7 +263,7 @@ void initial_tetrad_main(uniform InitialTetradPushConstants pc)
     float4 v2 = { 0.0, 0.0, 1.0, 0.0 };
     float4 v3 = { 0.0, 0.0, 0.0, 1.0 };
 
-    float4x4 metric = get_metric(m, pc.camera_pos);
+    float4x4 metric = get_metric(m, pc.pos);
 
     float4 as_array[4] = { v0, v1, v2, v3 };
     float lengths[4] = { 
@@ -299,7 +299,7 @@ void initial_tetrad_main(uniform InitialTetradPushConstants pc)
     *pc.e1 = tetrad.v[1];
     *pc.e2 = tetrad.v[2];
     *pc.e3 = tetrad.v[3];
-
+#if 0
     printf("Tetrad\n"
     "%f, %f, %f, %f\n"
     "%f, %f, %f, %f\n"
@@ -309,6 +309,7 @@ void initial_tetrad_main(uniform InitialTetradPushConstants pc)
     tetrad.v[1][0], tetrad.v[1][1], tetrad.v[1][2], tetrad.v[1][3],
     tetrad.v[2][0], tetrad.v[2][1], tetrad.v[2][2], tetrad.v[2][3],
     tetrad.v[3][0], tetrad.v[3][1], tetrad.v[3][2], tetrad.v[3][3]);
+#endif
 }
 
 float3 get_ray_through_pixel(uint sx, uint sy, uint width, uint height, float fov_degrees)
@@ -506,11 +507,62 @@ void main(
     output_img.Store(tid, float4(color, 1.0));
 }
 
+static const float s_trace_dt = 0.005;
+
+struct TraceGeodesicPushConstants
+{
+    float4 start_position;
+    uint max_steps;
+    uint pad0;
+    uint pad1;
+    uint pad2;
+    Ptr<float4, Access.Read> start_velocity;
+    float4 *out_positions;
+    float4 *out_velocities;
+    uint *out_steps;
+};
+
 bool geodesic_should_terminate(float4 start, float4 position, float4 velocity)
 {
     bool is_broken = any(isinf(position)) || any(isinf(velocity));
     bool escaped = position[1] > 10.0;
-    bool took_too_much_time = -position[0] > start[0] + 1000;
+    bool took_too_much_time = position[0] > start[0] + 1000;
     bool too_fast = abs(velocity[0]) >= 10.0;
     return escaped || took_too_much_time || too_fast || is_broken || position[1] < 0.1;
+}
+
+[shader("compute")]
+[numthreads(1, 1)]
+void trace_geodesic_main(uniform TraceGeodesicPushConstants pc)
+{
+    SchwarzschildMetric m;
+
+    float4 position = pc.start_position;
+    float4 velocity = *pc.start_velocity;
+
+    const float dt = s_trace_dt;
+
+    uint step = 0;
+    for (step = 0; step < pc.max_steps; ++step) {
+#if 0
+        printf("Step %u, position {%f, %f, %f, %f}, velocity {%f, %f, %f, %f}\n",
+            step,
+            position.x, position.y, position.z, position.w,
+            velocity.x, velocity.y, velocity.z, velocity.w);
+#endif
+
+        pc.out_positions[step] = position;
+        pc.out_velocities[step] = velocity;
+
+        float4 acceleration = calculate_acceleration(m, position, velocity);
+
+        velocity += acceleration * dt;
+        position += velocity * dt;
+
+        if (geodesic_should_terminate(pc.start_position, position, velocity)) {
+            break;
+        }
+    }
+
+    *pc.out_steps = step + 1;
 }
