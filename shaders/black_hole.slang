@@ -121,6 +121,38 @@ struct KerrMetric : IMetric
     }
 };
 
+struct EddingtonFinkelsteinMetric : IMetric
+{
+    static const float rs = 1.0;
+
+    [Differentiable]
+    float4x4 get(float4 position)
+    {
+        float r = position[1];
+        float theta = position[2];
+
+        float4x4 m = float4x4(0.0);
+        m[0][0] = -(1.0-rs/r);
+        m[1][0] = 1.0;
+        m[0][1] = 1.0;
+        m[2][2] = r*r;
+        m[3][3] = r*r*sin(theta)*sin(theta);
+        return m;
+    }
+
+    Tetrad calculate_tetrad(float4 position)
+    {
+        return {};
+    }
+
+    bool is_below_event_horizon(float r)
+    {
+        return r <= (rs + 0.0001);
+    }
+}
+
+struct ChosenMetric : IMetric = EddingtonFinkelsteinMetric;
+
 float4 lower_index(float4x4 metric, float4 v)
 {
     return mul(metric, v);
@@ -228,6 +260,15 @@ void swap<T>(inout T v1, inout T v2) where T : IArithmetic
     v1 = temp;
 }
 
+bool geodesic_should_terminate(float4 start, float4 position, float4 velocity, bool time_backwards)
+{
+    bool is_broken = any(isinf(position)) || any(isinf(velocity));
+    bool escaped = position[1] > 10.0;
+    bool took_too_much_time = ((time_backwards ? -1.0 : 1.0) * position[0]) > (start[0] + 1000);
+    bool too_fast = abs(velocity[0]) >= 10.0;
+    return escaped || took_too_much_time || too_fast || is_broken || position[1] < 0.1;
+}
+
 struct InitialTetradPushConstants
 {
     float4 pos;
@@ -241,7 +282,7 @@ struct InitialTetradPushConstants
 [numthreads(1, 1)]
 void initial_tetrad_main(uniform InitialTetradPushConstants pc)
 {
-    SchwarzschildMetric m;
+    ChosenMetric m;
 
     float4 v0 = { 1.0, 0.0, 0.0, 0.0 };
     float4 v1 = { 0.0, 1.0, 0.0, 0.0 };
@@ -400,7 +441,7 @@ IntegrationResult integrate(IMetric m, inout Geodesic g)
     result.type = HitType::UNFINISHED;
 
     float dl = 0.005;
-    float start_time = g.position[0];
+    float4 start_position = g.position;
 
     for (int i = 0; i < 100000; i++) {
         float4 acceleration = calculate_acceleration(m, g.position, g.velocity);
@@ -415,8 +456,9 @@ IntegrationResult integrate(IMetric m, inout Geodesic g)
             result.type = HitType::ESCAPED;
             return result;
         }
-
-        if (m.is_below_event_horizon(radius) || -g.position[0] > (start_time + 1000)) {
+        
+        if (geodesic_should_terminate(start_position, g.position, g.velocity, true)) {
+//        if (m.is_below_event_horizon(radius) || -g.position[0] > (start_time + 1000)) {
             //ray has very likely hit the event horizon
             result.type = HitType::EVENT_HORIZON;
             return result;
@@ -521,7 +563,7 @@ void render_main(
     float_controls();
     uint width = pc.width;
     uint height = pc.height;
-    SchwarzschildMetric metric;
+    ChosenMetric metric;
 
     float3 ray_direction = get_ray_through_pixel(tid.x, tid.y, width, height, 90);
 
@@ -570,20 +612,11 @@ struct TraceGeodesicPushConstants
     uint *out_steps;
 };
 
-bool geodesic_should_terminate(float4 start, float4 position, float4 velocity)
-{
-    bool is_broken = any(isinf(position)) || any(isinf(velocity));
-    bool escaped = position[1] > 10.0;
-    bool took_too_much_time = position[0] > start[0] + 1000;
-    bool too_fast = abs(velocity[0]) >= 10.0;
-    return escaped || took_too_much_time || too_fast || is_broken || position[1] < 0.1;
-}
-
 [shader("compute")]
 [numthreads(1, 1)]
 void trace_geodesic_main(uniform TraceGeodesicPushConstants pc)
 {
-    SchwarzschildMetric m;
+    ChosenMetric m;
 
     float4 position = pc.start_position;
     float4 velocity = *pc.start_velocity;
@@ -607,7 +640,7 @@ void trace_geodesic_main(uniform TraceGeodesicPushConstants pc)
         velocity += acceleration * dt;
         position += velocity * dt;
 
-        if (geodesic_should_terminate(pc.start_position, position, velocity)) {
+        if (geodesic_should_terminate(pc.start_position, position, velocity, false)) {
             break;
         }
     }
@@ -647,7 +680,7 @@ struct ParallelTransportPushConstants
 [numthreads(3, 1, 1)]
 void parallel_transport_tetrads(uint lid : SV_GroupThreadID, uniform ParallelTransportPushConstants pc)
 {
-    SchwarzschildMetric metric;
+    ChosenMetric metric;
     const float dt = s_trace_dt;
 
     uint steps = *pc.steps;

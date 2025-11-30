@@ -214,8 +214,8 @@ void compute_barrier(VkCommandBuffer cmd_buf)
 
 void App::run()
 {
-    uint32_t width = 1024;
-    uint32_t height = 768;
+    uint32_t width = 1920;
+    uint32_t height = 1080;
 	init_vk();
     create_initial_tetrad_pipeline();
     create_trace_geodesic_pipeline();
