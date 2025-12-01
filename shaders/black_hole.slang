@@ -1,4 +1,5 @@
 import glsl;
+import quaternion;
 
 struct Tetrad
 {
@@ -580,8 +581,6 @@ void render_main(
     uint height = pc.height;
     ChosenMetric metric;
 
-    float3 ray_direction = get_ray_through_pixel(tid.x, tid.y, width, height, 90);
-
 #if 0
     float4 camera_position = { 0.0 , 7.0, PI / 2.0, -PI / 2.0 };
     Tetrad tetrads = metric.calculate_tetrad(camera_position);
@@ -591,9 +590,11 @@ void render_main(
     interpolate(pc, camera_position, tetrads);
 #endif
 
+    float3 ray_direction = get_ray_through_pixel(tid.x, tid.y, width, height, 90);
     // the tetrad vectors give us a basis, that points in the direction t, r, theta, and phi
     // we'd like the ray to point towards the black hole: this means we make +z point towards -r, +y point towards +theta, and +x point towards +phi
     ray_direction = float3(-ray_direction[2], ray_direction[1], ray_direction[0]);
+    ray_direction = quat_rotate(ray_direction, normalize(float3(-1.0, 1.0, 0.0)), 45);
 
     Geodesic my_geodesic = make_lightlike_geodesic(camera_position, ray_direction, tetrads);
 
