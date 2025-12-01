@@ -434,20 +434,35 @@ struct IntegrationResult
     HitType type;
 };
 
+float get_timestep(float4 position, float4 velocity)
+{
+    float4 avelocity = abs(velocity);
+    float divisor = max(max(avelocity.x, avelocity.y), max(avelocity.z, avelocity.w));
+
+    float low_precision = 0.05 / divisor;
+    float normal_precision = 0.012 / divisor;
+    float high_precision = 0.005 / divisor;
+
+    float r = abs(position[1]);
+    return r < 10.0 ? (r < 3.0 ? high_precision : normal_precision) : low_precision;
+}
+
 // this integrates a geodesic, until it either escapes our small universe or hits the event horizon
 IntegrationResult integrate(IMetric m, inout Geodesic g)
 {
     IntegrationResult result;
     result.type = HitType::UNFINISHED;
 
-    float dl = 0.005;
     float4 start_position = g.position;
 
     for (int i = 0; i < 100000; i++) {
         float4 acceleration = calculate_acceleration(m, g.position, g.velocity);
 
-        g.velocity += acceleration * dl;
-        g.position += g.velocity * dl;
+        float dl = get_timestep(g.position, g.velocity);
+        float4 cpos = g.position;
+        float4 cvel = g.velocity;
+        g.position = cpos + cvel * dl;
+        g.velocity = cvel + acceleration * dl;
 
         float radius = g.position[1];
 
